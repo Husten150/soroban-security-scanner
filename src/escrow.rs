@@ -1,7 +1,14 @@
-use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, contractclient};
 
 #[contract]
 pub struct Escrow;
+
+#[contractclient(name = "EscrowClient")]
+pub trait EscrowTrait {
+    fn create_escrow(env: Env, beneficiary: Address, amount: i128);
+    fn release(env: Env);
+    fn get_escrow_info(env: Env) -> EscrowData;
+}
 
 #[derive(Clone)]
 pub struct EscrowData {
@@ -31,7 +38,7 @@ impl Escrow {
         env.storage().instance().set(&Symbol::new(&env, "balance"), &amount);
     }
     
-    /// VULNERABLE: Release funds to beneficiary - updates state AFTER external call
+    /// SECURE: Release funds to beneficiary - updates state BEFORE external call
     pub fn release(env: Env) {
         let escrow_key = Symbol::new(&env, "escrow");
         let escrow_data: EscrowData = env.storage().instance()
@@ -47,41 +54,7 @@ impl Escrow {
             .get(&balance_key)
             .expect("No balance found");
         
-        // VULNERABILITY: External call before state update
-        // This allows reentrancy attacks
-        env.current_contract_address()
-            .require_auth_for_args((&escrow_data.beneficiary, balance));
-        
-        // Transfer funds to beneficiary (external call simulation)
-        // In real implementation, this would be an actual token transfer
-        self::transfer_funds(&env, &escrow_data.beneficiary, balance);
-        
-        // STATE UPDATE HAPPENS AFTER EXTERNAL CALL - VULNERABLE!
-        let mut updated_escrow = escrow_data.clone();
-        updated_escrow.released = true;
-        env.storage().instance().set(&escrow_key, &updated_escrow);
-        
-        // Clear balance
-        env.storage().instance().remove(&balance_key);
-    }
-    
-    /// FIXED VERSION: Release funds to beneficiary - updates state BEFORE external call
-    pub fn release_fixed(env: Env) {
-        let escrow_key = Symbol::new(&env, "escrow");
-        let escrow_data: EscrowData = env.storage().instance()
-            .get(&escrow_key)
-            .expect("Escrow not found");
-        
-        if escrow_data.released {
-            panic!("Escrow already released");
-        }
-        
-        let balance_key = Symbol::new(&env, "balance");
-        let balance: i128 = env.storage().instance()
-            .get(&balance_key)
-            .expect("No balance found");
-        
-        // FIX: Update state BEFORE external call
+        // SECURITY: Update state BEFORE external call to prevent reentrancy
         let mut updated_escrow = escrow_data.clone();
         updated_escrow.released = true;
         env.storage().instance().set(&escrow_key, &updated_escrow);
@@ -89,14 +62,16 @@ impl Escrow {
         // Clear balance immediately
         env.storage().instance().remove(&balance_key);
         
-        // External call AFTER state update - safe from reentrancy
+        // External calls AFTER state update - secure from reentrancy
         env.current_contract_address()
             .require_auth_for_args((&escrow_data.beneficiary, balance));
         
         // Transfer funds to beneficiary (external call simulation)
+        // In real implementation, this would be an actual token transfer
         self::transfer_funds(&env, &escrow_data.beneficiary, balance);
     }
     
+        
     /// Helper function to simulate external fund transfer
     fn transfer_funds(env: &Env, recipient: &Address, amount: i128) {
         // In a real implementation, this would call a token contract
